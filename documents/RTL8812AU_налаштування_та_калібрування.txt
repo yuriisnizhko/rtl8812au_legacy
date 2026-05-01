@@ -1,0 +1,1099 @@
+============================================================
+  ІНСТРУКЦІЯ З НАЛАШТУВАННЯ ТА КАЛІБРУВАННЯ АДАПТЕРА RTL8812AU
+  (Для пристроїв БЕЗ записаного eFuse)
+============================================================
+Версія: 1.0  |  Мова: Українська
+============================================================
+
+ЗМІСТ
+-----
+1.  Вступ та вимоги
+2.  Встановлення драйвера
+3.  Налаштування параметрів PA/LNA/RFE для RTL8812AU без eFuse
+4.  Режим станції (STA) — підключення до Wi-Fi мережі
+    4.1.  Через NetworkManager (графічний інтерфейс)
+    4.2.  Через інструменти командного рядка (iwconfig/iwlist)
+    4.3.  Через wpa_supplicant та wpa_cli
+    4.4.  Отримання IP-адреси (DHCP / ручне налаштування)
+5.  Режим точки доступу (SoftAP) — 2,4 ГГц та 5 ГГц
+6.  Одночасний режим STA + SoftAP (Concurrent Mode)
+7.  Режим «міст» (Bridge Mode)
+8.  Режим моніторингу (Monitor Mode)
+9.  Керування потужністю передачі (TX Power)
+10. Зовнішні таблиці TX-потужності (без eFuse)
+11. МП-тестування (RF MP Test) — TX та RX
+12. Калібрування кристала (Crystal Calibration)
+13. Читання та запис eFuse через rtwpriv
+14. Верифікація TX power index з eFuse
+15. Керування LED-індикатором
+16. Налаштування NetworkManager
+17. Усунення поширених проблем
+
+
+============================================================
+1. ВСТУП ТА ВИМОГИ
+============================================================
+
+Цей адаптер на чіпі Realtek RTL8812AU підтримує стандарти
+802.11a/b/g/n/ac (2,4 ГГц і 5 ГГц), режими: Станція (STA),
+Точка доступу (SoftAP), Monitor, P2P.
+
+ВАЖЛИВО: Якщо чіп поставляється БЕЗ записаного eFuse (порожній
+eFuse, COB-монтаж або нова плата), необхідно вручну вказати тип
+підсилювача (PA/LNA/RFE) при завантаженні драйвера. Без цього
+адаптер може не запрацювати або видавати некоректну потужність.
+
+Вимоги до програмного забезпечення:
+  - ОС: Linux (Ubuntu, Kali, Arch, Armbian та ін.)
+  - Пакети для збірки: build-essential, bc, libelf-dev,
+    linux-headers-$(uname -r)
+  - Для роботи точки доступу: hostapd
+  - Для підключення до мереж: wpa_supplicant, wpa_cli
+  - Для RF MP тестування: утиліта rtwpriv (з комплекту драйвера)
+
+Встановлення пакетів (Debian/Ubuntu):
+  # sudo apt-get install build-essential bc libelf-dev \
+        linux-headers-$(uname -r) hostapd wpasupplicant
+
+
+============================================================
+2. ВСТАНОВЛЕННЯ ДРАЙВЕРА
+============================================================
+
+--- Варіант 1: Встановлення через DKMS (рекомендовано) ---
+
+DKMS автоматично перебудовує драйвер при оновленні ядра.
+
+  # sudo apt-get install dkms
+  # cd /шлях/до/вихідного/коду/драйвера
+  # sudo ./dkms-install.sh
+
+Для видалення:
+  # sudo ./dkms-remove.sh
+
+--- Варіант 2: Збірка і встановлення через make ---
+
+  # cd /шлях/до/вихідного/коду/драйвера
+  # make
+  # sudo make install
+
+--- Варіант 3: Для Raspberry Pi 2/3 (ARM) ---
+
+Змінити платформу в Makefile:
+  # sed -i 's/CONFIG_PLATFORM_I386_PC = y/CONFIG_PLATFORM_I386_PC = n/g' Makefile
+  # sed -i 's/CONFIG_PLATFORM_ARM_RPI = n/CONFIG_PLATFORM_ARM_RPI = y/g' Makefile
+  # make
+  # sudo cp 8812au.ko /lib/modules/$(uname -r)/kernel/drivers/net/wireless
+  # sudo depmod -a
+  # sudo modprobe 88XXau
+
+--- Варіант 4: Для Raspberry Pi 3 B+ (ARM64) ---
+
+  # sed -i 's/CONFIG_PLATFORM_I386_PC = y/CONFIG_PLATFORM_I386_PC = n/g' Makefile
+  # sed -i 's/CONFIG_PLATFORM_ARM64_RPI = n/CONFIG_PLATFORM_ARM64_RPI = y/g' Makefile
+  # make
+  # sudo cp 8812au.ko /lib/modules/$(uname -r)/kernel/drivers/net/wireless
+  # sudo depmod -a
+  # sudo modprobe 88XXau
+
+Перевірка, що драйвер завантажився:
+  # lsmod | grep 88XXau
+  # dmesg | tail -30
+
+
+============================================================
+3. НАЛАШТУВАННЯ PA/LNA/RFE ДЛЯ RTL8812AU БЕЗ EFUSE
+============================================================
+
+Це найважливіший розділ для пристроїв з порожнім eFuse!
+
+Якщо eFuse порожній, драйвер не знає, який тип підсилювача
+(PA/LNA) та тип RF front-end (RFE) встановлено на платі.
+Необхідно передати ці параметри вручну при завантаженні модуля.
+
+--- Параметри командного рядка insmod ---
+
+  # sudo insmod 8812au.ko \
+        rtw_amplifier_type_2g=<значення_2G> \
+        rtw_amplifier_type_5g=<значення_5G> \
+        rtw_RFE_type=<тип_RFE>
+
+Пояснення бітів rtw_amplifier_type_2g:
+  BIT3 (8)  = 2G зовнішній PA присутній
+  BIT4 (16) = 2G зовнішній LNA присутній
+
+Пояснення бітів rtw_amplifier_type_5g:
+  BIT6 (64) = 5G зовнішній PA присутній
+  BIT7 (128)= 5G зовнішній LNA присутній
+
+Значення ODM_BOARD для довідки:
+  0   = DEFAULT (за замовчуванням)
+  1   = MINICARD (mini-карта)
+  2   = SLIM
+  4   = BT (з Bluetooth)
+  8   = 2G ext-PA
+  16  = 2G ext-LNA
+  32  = ext-TRSW
+  64  = 5G ext-PA
+  128 = 5G ext-LNA
+
+Типи RFE (rtw_RFE_type):
+  1 = SW_LNA_PA (SKY85703) — тип APA_ALNA
+  2 = SW_LNA (SKY85601)    — тип ALNA
+  3 = 2G&5G SW+PA+LNA      — тип PA_LNA
+  4 = SP3T                 — DEFAULT
+
+Приклад: 2G з внутрішнім PA/LNA, 5G із зовнішнім PA і LNA:
+  # sudo insmod 8812au.ko \
+        rtw_amplifier_type_2g=0 \
+        rtw_amplifier_type_5g=192 \
+        rtw_RFE_type=1
+
+  (192 = BIT6 + BIT7 = 64 + 128 — обидва 5G ext-PA і 5G ext-LNA)
+
+--- Постійне збереження параметрів (modprobe.conf) ---
+
+Щоб параметри застосовувались автоматично при кожному
+завантаженні, додайте рядок до /etc/modprobe.d/88XXau.conf:
+
+  options 88XXau rtw_amplifier_type_2g=0 rtw_amplifier_type_5g=192 rtw_RFE_type=1
+
+Або скористайтесь готовим файлом realtek_88XXau.conf з драйвера:
+  # sudo cp realtek_88XXau.conf /etc/modprobe.d/
+
+Вміст за замовчуванням у цьому репозиторії:
+  options 88XXau rtw_power_mgnt=0 rtw_enusbss=0 rtw_ips_mode=1 \
+                 rtw_vht_enable=2 rtw_ht_enable=1 rtw_led_enable=1
+
+  rtw_vht_enable=2  — увімкнути 802.11ac (VHT/5G AC режим)
+  rtw_ht_enable=1   — увімкнути 802.11n (HT режим)
+  rtw_power_mgnt=0  — вимкнути управління живленням (стабільніше)
+
+--- Вибір антени (для плат з кількома антенами) ---
+
+Перемикання на основну (MAIN) антену:
+  # rtwpriv wlan0 mp_setrfpath 1
+
+Перемикання на допоміжну (AUX) антену:
+  # rtwpriv wlan0 mp_setrfpath 0
+
+
+============================================================
+4. РЕЖИМ СТАНЦІЇ (STA) — ПІДКЛЮЧЕННЯ ДО WI-FI МЕРЕЖІ
+============================================================
+
+4.1. Через NetworkManager (графічний інтерфейс)
+-------------------------------------------------
+У дистрибутивах Fedora, Ubuntu тощо можна використати
+графічну утиліту Network Manager — просто клацнути на іконку
+Wi-Fi і вибрати мережу. Це найпростіший спосіб.
+
+
+4.2. Через інструменти командного рядка (iwconfig/iwlist)
+----------------------------------------------------------
+УВАГА: цей метод НЕ підтримує WPA/WPA2 та WPS. Підходить
+лише для відкритих мереж або WEP (застаріло, небезпечно).
+
+Крок 1 — Підняти інтерфейс:
+  # sudo ifconfig wlan0 up
+
+Крок 2 — Сканування доступних мереж:
+  # iwlist wlan0 scan
+  # iwlist wlan0 channel
+  # iwlist wlan0 rate
+
+Крок 3 — Підключитися до відкритої мережі за SSID:
+  # iwconfig wlan0 mode Managed
+  # iwconfig wlan0 essid "Назва_мережі"
+
+Крок 4 — Підключитися за MAC-адресою точки доступу:
+  # iwconfig wlan0 mode Managed
+  # iwconfig wlan0 ap XX:XX:XX:XX:XX:XX
+
+Крок 5 — Ad-hoc режим:
+  # iwconfig wlan0 mode Ad-hoc
+  # iwconfig wlan0 essid "Назва_мережі"
+
+Встановлення WEP ключа (застаріло):
+  # iwconfig wlan0 key 0123456789
+
+
+4.3. Через wpa_supplicant та wpa_cli (рекомендовано для WPA/WPA2)
+-------------------------------------------------------------------
+Це найбільш надійний спосіб підключення.
+
+Крок 1 — Зупинити NetworkManager і фонові wpa_supplicant:
+
+  В Ubuntu:
+    # sudo /etc/init.d/network-manager stop
+
+  В Fedora:
+    # sudo /etc/init.d/NetworkManager stop
+
+  Зупинити фоновий wpa_supplicant:
+    # ps aux | grep wpa_supplicant
+    # sudo kill <PID>
+
+Крок 2 — Запустити wpa_supplicant у фоновому режимі:
+
+  # sudo wpa_supplicant -Dnl80211 -iwlan0 -c /tmp/wpa.conf -B
+  або (старий драйвер):
+  # sudo wpa_supplicant -Dwext -iwlan0 -c /tmp/wpa.conf -B
+
+  Файл wpa.conf — базова конфігурація (приклад зі wpa_0_8.conf):
+    ctrl_interface=/var/run/wpa_supplicant
+    update_config=1
+    device_name=RTL8812AU
+    manufacturer=Realtek
+    model_name=RTW_STA
+    device_type=1-0050F204-1
+    os_version=01020300
+    config_methods=virtual_display virtual_push_button keypad
+
+Крок 3 — Сканування мереж:
+  # wpa_cli -p/var/run/wpa_supplicant scan
+  # wpa_cli -p/var/run/wpa_supplicant scan_results
+
+Крок 4 — Підключення до мережі:
+
+  а) ВІДКРИТА мережа:
+    # wpa_cli -p/var/run/wpa_supplicant remove_network 0
+    # wpa_cli -p/var/run/wpa_supplicant ap_scan 1
+    # wpa_cli -p/var/run/wpa_supplicant add_network
+    # wpa_cli -p/var/run/wpa_supplicant set_network 0 ssid '"ім'я_мережі"'
+    # wpa_cli -p/var/run/wpa_supplicant set_network 0 key_mgmt NONE
+    # wpa_cli -p/var/run/wpa_supplicant select_network 0
+
+  б) WPA/WPA2 мережа (TKIP або AES):
+    # wpa_cli -p/var/run/wpa_supplicant remove_network 0
+    # wpa_cli -p/var/run/wpa_supplicant ap_scan 1
+    # wpa_cli -p/var/run/wpa_supplicant add_network
+    # wpa_cli -p/var/run/wpa_supplicant set_network 0 ssid '"ім'я_мережі"'
+    # wpa_cli -p/var/run/wpa_supplicant set_network 0 key_mgmt WPA-PSK
+    # wpa_cli -p/var/run/wpa_supplicant set_network 0 psk '"пароль"'
+    # wpa_cli -p/var/run/wpa_supplicant select_network 0
+
+  в) WEP40 (відкрита система):
+    # wpa_cli -p/var/run/wpa_supplicant remove_network 0
+    # wpa_cli -p/var/run/wpa_supplicant ap_scan 1
+    # wpa_cli -p/var/run/wpa_supplicant add_network
+    # wpa_cli -p/var/run/wpa_supplicant set_network 0 ssid '"ім'я_мережі"'
+    # wpa_cli -p/var/run/wpa_supplicant set_network 0 key_mgmt NONE
+    # wpa_cli -p/var/run/wpa_supplicant set_network 0 wep_key0 1234567890
+    # wpa_cli -p/var/run/wpa_supplicant set_network 0 wep_tx_keyidx 0
+    # wpa_cli -p/var/run/wpa_supplicant select_network 0
+
+  г) WPS підключення (за кнопкою PBC):
+    # wpa_cli -p/var/run/wpa_supplicant remove_network 0
+    # wpa_cli -p/var/run/wpa_supplicant wps_pbc any
+
+  д) WPS підключення (за PIN-кодом):
+    # wpa_cli -p/var/run/wpa_supplicant remove_network 0
+    # wpa_cli -p/var/run/wpa_supplicant wps_pin any 12345670
+
+  е) Ad-hoc режим (ВІДКРИТА):
+    # wpa_cli -p/var/run/wpa_supplicant remove_network 0
+    # wpa_cli -p/var/run/wpa_supplicant ap_scan 2
+    # wpa_cli -p/var/run/wpa_supplicant add_network
+    # wpa_cli -p/var/run/wpa_supplicant set_network 0 ssid '"Adhoc_test"'
+    # wpa_cli -p/var/run/wpa_supplicant set_network 0 mode 1
+    # wpa_cli -p/var/run/wpa_supplicant set_network 0 key_mgmt NONE
+    # wpa_cli -p/var/run/wpa_supplicant set_network 0 frequency 2412
+    # wpa_cli -p/var/run/wpa_supplicant select_network 0
+    (2412 МГц = канал 1; змінюйте частоту для інших каналів)
+
+Крок 5 — Перевірити стан підключення:
+  # wpa_cli -p/var/run/wpa_supplicant status
+
+Крок 6 — Зберегти конфігурацію:
+  # wpa_cli -p/var/run/wpa_supplicant save_config
+
+Вимкнути підключення:
+  # wpa_cli -p/var/run/wpa_supplicant disable_network 0
+
+
+4.4. Отримання IP-адреси
+-------------------------
+Після успішного підключення до мережі потрібна IP-адреса.
+
+а) Автоматично (DHCP):
+  # sudo dhclient wlan0
+
+б) Вручну:
+  # sudo ifconfig wlan0 172.21.69.92 netmask 255.255.255.0
+
+Додатково задати маршрут за замовчуванням:
+  # sudo route add default gw 172.21.69.1 wlan0
+
+
+============================================================
+5. РЕЖИМ ТОЧКИ ДОСТУПУ (SOFTAP) — 2,4 ГГц ТА 5 ГГц
+============================================================
+
+Для роботи SoftAP використовується демон hostapd.
+
+Підтримувані можливості SoftAP:
+  - Один SSID
+  - До 4 клієнтів (перевірено)
+  - Безпека: Open, WPA-PSK (CCMP/AES)
+  - Стандарти: B/G/N (2,4 ГГц) та A/N (5 ГГц)
+  - WPS (PIN і PBC методи)
+  - 802.11n HT 20/40 МГц
+
+--- 5.1. Конфігураційний файл SoftAP для 2,4 ГГц ---
+
+Збережіть як /etc/hostapd/rtl_hostapd_2G.conf:
+
+  ##### hostapd configuration file ####
+  interface=wlan0
+  ctrl_interface=/var/run/hostapd
+  ssid=MyAccessPoint
+  channel=6
+  wpa=2
+  wpa_passphrase=MyPassword123
+
+  ##### WPS ####
+  eap_server=1
+  wps_state=2
+  uuid=12345678-9abc-def0-1234-56789abcdef0
+  device_name=RTL8812AU
+  manufacturer=Realtek
+  model_name=RTW_SOFTAP
+  model_number=WLAN_AU
+  serial_number=12345
+  device_type=6-0050F204-1
+  os_version=01020300
+  config_methods=label display push_button keypad
+
+  ##### Параметри режиму ####
+  driver=rtl871xdrv
+  beacon_int=100
+  hw_mode=g
+  ieee80211n=1
+  wme_enabled=1
+  ht_capab=[SHORT-GI-20][SHORT-GI-40][HT40+]
+  wpa_key_mgmt=WPA-PSK
+  wpa_pairwise=CCMP
+  max_num_sta=8
+  wpa_group_rekey=86400
+
+Пояснення ключових параметрів:
+  interface     — ім'я Wi-Fi інтерфейсу (напр. wlan0)
+  ssid          — назва Wi-Fi мережі (SSID)
+  channel       — номер каналу (1-13 для 2,4 ГГц)
+  wpa=2         — WPA2 захист
+  wpa_passphrase— пароль мережі (мінімум 8 символів)
+  hw_mode=g     — режим: g=2,4ГГц, a=5ГГц
+  ieee80211n=1  — увімкнути 802.11n (HT)
+
+--- 5.2. Конфігураційний файл SoftAP для 5 ГГц ---
+
+Збережіть як /etc/hostapd/rtl_hostapd_5G.conf:
+(Аналогічний файл, але змінити:)
+  channel=36
+  hw_mode=a
+
+Канали 5 ГГц: 36, 40, 44, 48, 52, 56, 60, 64, 100...165
+
+--- 5.3. Запуск SoftAP ---
+
+Крок 1 — Задати IP-адресу для інтерфейсу AP:
+  # sudo ifconfig wlan0 192.168.1.1 up
+
+Крок 2 — Зупинити конкуруючі сервіси:
+  # sudo /etc/init.d/network-manager stop
+  # sudo killall wpa_supplicant
+
+Крок 3 — Запустити hostapd:
+  # sudo hostapd /etc/hostapd/rtl_hostapd_2G.conf -B
+  або з детальним виводом:
+  # sudo hostapd /etc/hostapd/rtl_hostapd_2G.conf -dd -B
+
+Крок 4 — Для 802.11ac (5G AC, висока швидкість):
+  # sudo modprobe -r 88XXau
+  # sudo modprobe 88XXau rtw_vht_enable=2
+  Потім запускати hostapd зі файлом 5G конфігурації.
+
+Перевірка підключення клієнта:
+Клієнт підключається до SSID і задає статичну IP
+192.168.1.x (шлюз 192.168.1.1), потім:
+  # ping 192.168.1.1
+
+
+============================================================
+6. ОДНОЧАСНИЙ РЕЖИМ STA + SOFTAP (CONCURRENT MODE)
+============================================================
+
+RTL8812AU підтримує одночасну роботу в режимах STA та SoftAP,
+коли один інтерфейс підключається до зовнішньої точки доступу
+(STA), а інший виступає як внутрішня точка доступу (SoftAP).
+
+--- 6.1. Увімкнення Concurrent Mode у драйвері ---
+
+У вихідному коді драйвера (файл include/autoconf.h)
+розкоментувати рядок:
+  //#define CONFIG_CONCURRENT_MODE
+змінити на:
+  #define CONFIG_CONCURRENT_MODE
+
+Або додати до Makefile/CFLAGS:
+  EXTRA_CFLAGS += -DCONFIG_CONCURRENT_MODE
+
+Перезбирати і встановлювати драйвер.
+
+--- 6.2. Налаштування SoftAP у конкурентному режимі ---
+
+Крок 1 — Вставити модуль (для 11ac режиму додати параметр):
+  # sudo insmod ./8812au.ko rtw_vht_enable=2
+
+Крок 2 — Перевірити доступні інтерфейси:
+  # ifconfig -a
+  (очікується wlan0 і wlan1 або схожі)
+
+Крок 3 — Задати IP для інтерфейсу SoftAP (наприклад wlan1):
+  # sudo ifconfig wlan1 192.168.1.1 up
+
+Крок 4 — Зупинити конкуруючі сервіси:
+  # sudo /etc/init.d/network-manager stop
+  # sudo killall wpa_supplicant
+
+Крок 5 — У конфігурації hostapd вказати потрібний інтерфейс:
+  (змінити interface=wlan0 на interface=wlan1)
+
+Крок 6 — Запустити SoftAP:
+  # sudo hostapd rtl_hostapd_2G.conf -dd -B
+
+--- 6.3. Налаштування STA у конкурентному режимі ---
+
+Крок 1 — Зібрати і запустити wpa_supplicant:
+  # sudo wpa_supplicant -Dwext -iwlan0 -c ./wpa_0_8.conf -B
+  (wlan0 — інтерфейс для STA, відмінний від інтерфейсу SoftAP)
+
+Крок 2 — Підключитися до зовнішньої мережі через wpa_cli
+  (дивіться розділ 4.3 вище)
+
+Крок 3 — Отримати IP:
+  # sudo dhclient wlan0
+
+--- 6.4. Для 11ac у конкурентному режимі ---
+
+Використовувати rtl_hostapd_5G.conf замість rtl_hostapd_2G.conf.
+Параметр rtw_vht_enable=2 обов'язковий.
+
+
+============================================================
+7. РЕЖИМ «МІСТ» (BRIDGE MODE)
+============================================================
+
+Bridge Mode об'єднує Wi-Fi та провідний (Ethernet) інтерфейси
+в один логічний сегмент мережі.
+
+Крок 1 — Створити міст:
+  # brctl addbr br0
+
+Крок 2 — Додати інтерфейси до мосту:
+  # brctl addif br0 wlan0
+  # brctl addif br0 eth0
+
+Крок 3 — Обнулити затримку переадресації:
+  # brctl setfd br0 0
+
+--- SoftAP у режимі мосту ---
+Додати у файл rtl_hostapd.conf параметр:
+  bridge=br0
+Решта налаштувань залишаються такими самими.
+
+--- STA у режимі мосту ---
+Запускати wpa_supplicant з параметром -b br0:
+  # wpa_supplicant -Dwext -iwlan0 -c /tmp/wpa.conf -b br0 -B
+
+--- IP-адреса для мосту ---
+Рекомендується задати IP на самому мості br0:
+  # ifconfig br0 192.168.0.1          (статично)
+  або
+  # dhclient br0                      (через DHCP)
+
+
+============================================================
+8. РЕЖИМ МОНІТОРИНГУ (MONITOR MODE)
+============================================================
+
+Режим моніторингу дозволяє захоплювати всі Wi-Fi пакети
+в ефірі без прив'язки до конкретної мережі.
+
+Крок 1 — Усунути конфліктуючі процеси:
+  # sudo airmon-ng check kill
+
+Крок 2 — Опустити інтерфейс:
+  # sudo ip link set wlan0 down
+
+Крок 3 — Перевести в режим моніторингу (одним із способів):
+  # sudo airmon-ng start wlan0
+  або
+  # sudo iw dev wlan0 set type monitor
+
+Крок 4 — Підняти інтерфейс:
+  # sudo ip link set wlan0 up
+
+Перевірка режиму:
+  # iwconfig wlan0
+  (повинно відображатися Mode:Monitor)
+
+Для повернення до керованого режиму:
+  # sudo iw dev wlan0 set type managed
+
+
+============================================================
+9. КЕРУВАННЯ ПОТУЖНІСТЮ ПЕРЕДАЧІ (TX POWER)
+============================================================
+
+Задати потужність TX через iwconfig:
+  # iwconfig wlan0 txpower 30
+
+Задати потужність TX через iw (в mBm):
+  # iw wlan0 set txpower fixed 3000
+
+ПРИМІТКА: У цьому форку драйвера малі значення mBm
+перевизначають індекс потужності безпосередньо:
+  - значення 1..63 → використовується як power index
+  - максимальний power index = 63 (повна потужність)
+  Наприклад: iw dev wlan0 set txpower fixed 63 задасть
+  максимальну потужність (power index 63).
+
+Параметр для завантаження модуля:
+  # sudo modprobe 88XXau rtw_vht_enable=2
+
+
+============================================================
+10. ЗОВНІШНІ ТАБЛИЦІ TX-ПОТУЖНОСТІ (БЕЗ EFUSE)
+============================================================
+
+RTL8812AU використовує два файли таблиць:
+  PHY_REG_PG.txt  — TX_power_by_rate_table
+  TXPWR_LMT.txt   — TX_power_limit_table (регуляторні обмеження)
+
+Ці таблиці зазвичай записані у eFuse на заводі. Якщо eFuse
+порожній або потрібна кастомізація — завантажуйте файли.
+
+Регуляторні регіони (regional standards):
+  FCC  — США та більшість країн (крім Європи та Японії/Кореї)
+  ETSI — Європа
+  MKK  — Японія та Корея
+
+--- 10.1. Крок 1: Увімкнути завантаження з файлу у Makefile ---
+
+Відкрити Makefile і знайти рядок:
+  CONFIG_LOAD_PHY_PARA_FROM_FILE = n
+Змінити на:
+  CONFIG_LOAD_PHY_PARA_FROM_FILE = y
+
+--- 10.2. Крок 2: Розмістити файли ---
+
+Створити директорію для чіпа RTL8812A:
+  # sudo mkdir -p /lib/firmware/rtl8812a
+
+Скопіювати таблиці потужності:
+  # sudo cp PHY_REG_PG.txt /lib/firmware/rtl8812a/
+  # sudo cp TXPWR_LMT.txt  /lib/firmware/rtl8812a/
+
+--- 10.3. Крок 3: Вказати шлях у Makefile ---
+
+Розкоментувати рядок:
+  EXTRA_CFLAGS += -DREALTEK_CONFIG_PATH=\"/lib/firmware/\"
+і закоментувати:
+  #EXTRA_CFLAGS += -DREALTEK_CONFIG_PATH=\"\"
+
+--- 10.4. Крок 4: Увімкнути калібрування ---
+
+Варіант A: калібрування за регуляторними нормами (FCC/ETSI/MKK):
+  CONFIG_CALIBRATE_TX_POWER_BY_REGULATORY = y
+  (застосовує PHY_REG_PG.txt і TXPWR_LMT.txt)
+
+Варіант B: калібрування до максимальних значень:
+  CONFIG_CALIBRATE_TX_POWER_TO_MAX = y
+  (застосовує тільки PHY_REG_PG.txt)
+
+--- 10.5. Альтернативно: параметри при завантаженні модуля ---
+
+  # sudo insmod 8812au.ko \
+        rtw_tx_pwr_lmt_enable=1 \
+        rtw_tx_pwr_by_rate=1 \
+        rtw_phy_file_path="/lib/firmware/" \
+        rtw_decrypt_phy_file=0
+
+Пояснення параметрів:
+  rtw_tx_pwr_lmt_enable:
+    0 = вимкнути обмеження потужності
+    1 = увімкнути обмеження потужності
+    2 = залежить від eFuse
+
+  rtw_tx_pwr_by_rate:
+    0 = вимкнути таблицю по швидкостях
+    1 = увімкнути таблицю по швидкостях
+    2 = залежить від eFuse
+
+  rtw_phy_file_path = шлях до директорії з файлами
+  rtw_decrypt_phy_file = 0 (файл не зашифрований)
+
+--- 10.6. Перевірка завантаження таблиць ---
+
+  # sudo tail -f /var/log/kern.log
+
+Після вставки модуля повинна з'явитися стрічка:
+  RTL871X: retriveFromFile openFile path:/lib/firmware/rtl8812a/TXPWR_LMT.txt
+  fp = ffff8800a62ebc00
+
+
+============================================================
+11. МП-ТЕСТУВАННЯ (RF MP TEST) — TX ТА RX
+============================================================
+
+Для RF MP тестування потрібна утиліта rtwpriv та драйвер,
+зібраний з опцією CONFIG_MP_INCLUDED = y.
+
+--- 11.1. Збірка драйвера для MP тестування ---
+
+У Makefile знайти і змінити:
+  CONFIG_MP_INCLUDED = n  →  CONFIG_MP_INCLUDED = y
+Потім перезбирати: # make
+
+--- 11.2. Збірка утиліти rtwpriv ---
+
+  # cd rtwpriv/
+  # make
+  Виконуваний файл: rtwpriv
+
+--- 11.3. TX тестування (покроковий порядок) ---
+
+Важливо: команди виконувати СТРОГО у зазначеному порядку!
+Якщо потрібно змінити параметри під час тесту — спочатку
+виконати "rtwpriv wlan0 mp_ctx stop".
+
+1. Підняти інтерфейс:
+   # ifconfig wlan0 up
+
+2. Увійти в режим MP:
+   # rtwpriv wlan0 mp_start
+
+3. Задати ширину смуги:
+   # rtwpriv wlan0 mp_bandwidth 40M=0,shortGI=0
+   (40M=0 → 20 МГц, 40M=1 → 40 МГц, 40M=2 → 80 МГц)
+   (shortGI=0 → довгий GI, shortGI=1 → короткий GI)
+
+4. Задати канал:
+   # rtwpriv wlan0 mp_channel 1
+   (2,4 ГГц: канали 1-13; 5 ГГц: 36-161 та ін.)
+
+5. Вибрати антену TX:
+   # rtwpriv wlan0 mp_ant_tx a
+   (a = антена A; b = антена B; ab = обидві)
+
+6. Задати швидкість передачі:
+   # rtwpriv wlan0 mp_rate 108
+   Числові коди швидкостей:
+     CCK:  1M=2, 2M=4, 5.5M=11, 11M=22
+     OFDM: 6M=12, 9M=18, 12M=24, 18M=36, 24M=48,
+           36M=72, 48M=96, 54M=108
+     HT:   MCS0=128, MCS1=129 ... MCS7=135 ... MCS15=143
+     VHT:  MCS0=160, MCS1=161 ... MCS9=169
+
+   Або за назвою:
+   # rtwpriv wlan0 mp_rate 54M
+
+7. Задати рівень потужності TX:
+   # rtwpriv wlan0 mp_txpower patha=44,pathb=44
+   (діапазон: 0..63; вищий = більша потужність)
+
+   Щоб отримати power index з eFuse:
+   # rtwpriv wlan0 mp_get_txpower
+
+8. Запустити тест TX (один із режимів):
+
+   а) Безперервна передача (Continuous TX):
+      # rtwpriv wlan0 mp_ctx background
+
+   б) Безперервна пакетна передача:
+      # rtwpriv wlan0 mp_ctx background,pkt
+
+   в) Передача обмеженої кількості пакетів:
+      # rtwpriv wlan0 mp_ctx count=1000,pkt
+      (замість 1000 вкажіть потрібну кількість)
+
+   г) Тест придушення несучої (Carrier Suppression, лише CCK):
+      # rtwpriv wlan0 mp_rate 22
+      # rtwpriv wlan0 mp_ctx background,cs
+
+   д) Тест Single Tone (немодульований сигнал):
+      # rtwpriv wlan0 mp_ctx background,stone
+
+9. Зупинити TX:
+   # rtwpriv wlan0 mp_ctx stop
+
+10. Вийти з режиму MP:
+    # rtwpriv wlan0 mp_stop
+
+11. Закрити інтерфейс:
+    # ifconfig wlan0 down
+
+--- Швидка TX-команда (для версій драйвера > v4.3.18 r14317) ---
+
+  # rtwpriv wlan0 mp_tx ch=6,bw=0,rate=108,pwr=40,ant=0,tx=1
+
+Параметри:
+  ch   = канал (2,4G: 1-14; 5G: 36-165)
+  bw   = ширина смуги (0=20M, 1=40M, 2=80M)
+  rate = код швидкості (дивіться таблицю вище)
+  pwr  = рівень потужності (1..63)
+  ant  = антена (A=1, B=2, C=4, D=8; 2T: AB=3, BC=6, CD=12)
+  tx   = режим (0=Continuous, 1=Packet, 2=Single Tone,
+                3=Carrier Suppression, 4=Single Carrier)
+
+Зупинити: # rtwpriv wlan0 mp_tx stop
+Статус:   # rtwpriv wlan0 mp_tx setting
+Лічильник:# rtwpriv wlan0 mp_query
+
+--- 11.4. RX тестування ---
+
+  # ifconfig wlan0 up
+  # rtwpriv wlan0 mp_start
+  # rtwpriv wlan0 mp_bandwidth 40M=0,shortGI=0
+  # rtwpriv wlan0 mp_channel 1
+  # rtwpriv wlan0 mp_ant_rx a
+  # rtwpriv wlan0 mp_arx start
+
+  Отримати статистику RX:
+  # rtwpriv wlan0 mp_query
+  або (для SDIO інтерфейсу):
+  # rtwpriv wlan0 mp_arx phy
+
+  Зупинити та показати статистику:
+  # rtwpriv wlan0 mp_arx stop
+
+  Скинути лічильники:
+  # rtwpriv wlan0 mp_reset_stats
+
+  # rtwpriv wlan0 mp_stop
+  # ifconfig wlan0 down
+
+--- Швидка RX-команда ---
+  # rtwpriv wlan0 mp_rx ch=1,bw=0,ant=0
+  # rtwpriv wlan0 mp_query
+
+--- 11.5. Керування TX Power Tracking ---
+
+Увімкнути відстеження потужності TX:
+  # rtwpriv wlan0 mp_pwrctldm start
+
+Вимкнути відстеження потужності TX:
+  # rtwpriv wlan0 mp_pwrctldm stop
+
+
+============================================================
+12. КАЛІБРУВАННЯ КРИСТАЛА (CRYSTAL CALIBRATION)
+============================================================
+
+Калібрування кристала необхідне для точного налаштування
+частоти тактового генератора. Результат зберігається у eFuse.
+
+eFuse зміщення для кристала: 0xB9
+  Біти [5:0]: Xi=Xo діапазон 0..3Fh
+  Значення за замовчуванням: 0x20 (32 десяткове)
+  FFh = 00h (обгортається до нуля)
+
+Покрокова процедура:
+
+1. Завантажити модуль і підняти інтерфейс:
+   # insmod 8812au.ko
+   # ifconfig wlan0 up
+
+2. Увійти в режим MP:
+   # rtwpriv wlan0 mp_start
+
+3. Задати RF шлях і антену:
+   # rtwpriv wlan0 mp_setrfpath 0
+   # rtwpriv wlan0 mp_ant_tx a
+
+4. Задати канал і потужність:
+   # rtwpriv wlan0 mp_channel 7
+   # rtwpriv wlan0 mp_txpower patha=42
+
+5. Задати початкове значення xcap та запустити Single Tone:
+   # rtwpriv wlan0 mp_phypara xcap=32
+   # rtwpriv wlan0 mp_ctx background,stone
+
+6. Підключити вимірювальний прилад (аналізатор спектра або
+   частотомір) і поступово підбирати значення xcap:
+   # rtwpriv wlan0 mp_phypara xcap=26
+   # rtwpriv wlan0 mp_phypara xcap=24
+   (кожного разу вимірювати відхилення частоти)
+
+7. Коли знайдено оптимальне значення (наприклад xcap=24),
+   зупинити тест:
+   # rtwpriv wlan0 mp_ctx stop
+
+8. Записати значення xcap у eFuse (зміщення 0xB9):
+   xcap у десятковій × ... → у шістнадцятковій
+   Приклад: xcap=24 → 24 dec = 0x18 hex
+   # rtwpriv wlan0 efuse_set wmap,b9,18
+
+9. Перевірити запис:
+   # rtwpriv wlan0 efuse_get rmap,b9,1
+
+ПРИМІТКА: Конкретне eFuse-зміщення для кристала залежить від
+чіпа. Для RTL8188EU це 0xB9. Для RTL8812AU звіртеся зі
+специфікацією eFuse (RTL8812AU_EFuse_SPEC_V3.8_20130206.doc).
+
+
+============================================================
+13. ЧИТАННЯ ТА ЗАПИС EFUSE ЧЕРЕЗ rtwpriv
+============================================================
+
+Усі eFuse-операції виконуються ЛИШЕ у режимі MP (після mp_start)
+або при вимкненому режимі збереження енергії (IPS).
+
+Щоб вийти з IPS перед записом fake-карти:
+  # rtwpriv wlan0 mp_start
+  або
+  # rtwpriv wlan0 pm_set ips=0
+
+--- 13.1. Читання eFuse ---
+
+Прочитати всю логічну карту eFuse:
+  # rtwpriv wlan0 efuse_get realmap
+
+Прочитати фізичну PHY-карту eFuse:
+  # rtwpriv wlan0 efuse_get realraw
+
+Прочитати MAC-адресу:
+  # rtwpriv wlan0 efuse_get mac
+
+Прочитати N байт починаючи з певної адреси:
+  # rtwpriv wlan0 efuse_get rmap,16,6
+  (зміщення=0x16, кількість байт=6)
+
+Прочитати fake (тимчасову) карту eFuse:
+  # rtwpriv wlan0 efuse_get wlrfkmap
+
+Прочитати поточну карту eFuse, завантажену в драйвер:
+  # rtwpriv wlan0 efuse_get drvmap
+
+--- 13.2. Запис eFuse ---
+
+Записати дані за адресою 0x16 (6 байт):
+  # rtwpriv wlan0 efuse_set wmap,16,00e04c871234
+
+Записати MAC-адресу:
+  # rtwpriv wlan0 efuse_set mac,00e04c871234
+
+Записати у fake eFuse (тимчасово, в пам'яті драйвера):
+  # rtwpriv wlan0 efuse_set wlwfake,16,00e04c871234
+
+Скопіювати HW eFuse до fake-карти в драйвері:
+  # rtwpriv wlan0 efuse_set wldumpfake
+
+Записати fake-карту на HW eFuse (НЕОБОРОТНА ДІЯ!):
+  # rtwpriv wlan0 efuse_set wlfk2map
+
+--- 13.3. Приклад повного запису eFuse через fake-карту ---
+
+УВАГА: Запис у HW eFuse є НЕОБОРОТНИМ. Перевіряйте дані
+перед виконанням efuse_set wlfk2map!
+
+1. Переконатися, що не активний IPS (вийти з normal mode):
+   # rtwpriv wlan0 mp_start
+
+2. Послідовно записати всі дані у fake-карту:
+   # rtwpriv wlan0 efuse_set wlwfake,00,00112233445566778899aabbccddeeff
+   # rtwpriv wlan0 efuse_set wlwfake,10,00112233445566778899aabbccddeeff
+   # rtwpriv wlan0 efuse_set wlwfake,20,...
+   # rtwpriv wlan0 efuse_set wlwfake,c0,...
+
+3. Перевірити fake-карту:
+   # rtwpriv wlan0 efuse_get wlrfkmap
+
+4. Якщо все правильно — записати на HW eFuse:
+   # rtwpriv wlan0 efuse_set wlfk2map
+
+5. Верифікувати запис:
+   # rtwpriv wlan0 efuse_get realmap
+
+--- 13.4. Завантаження eFuse з файлу ---
+
+(Потребує версії драйвера > rtl8xxx_WiFi_linux_v4.X.X_12561)
+
+1. Вийти з normal mode:
+   # rtwpriv wlan0 mp_start
+
+2. Завантажити файл у fake-карту:
+   # rtwpriv wlan0 efuse_file /шлях/до/efuse.map
+
+3. Перевірити:
+   # rtwpriv wlan0 efuse_get wlrfkmap
+
+4. Записати на HW:
+   # rtwpriv wlan0 efuse_set wlfk2map
+
+5. Верифікувати:
+   # rtwpriv wlan0 efuse_get realmap
+
+--- 13.5. Налаштування читання eFuse з файлу (Makefile) ---
+
+Якщо потрібно, щоб драйвер зчитував eFuse з файлу під час
+ініціалізації:
+
+1. Задати у Makefile:
+   CONFIG_EFUSE_CONFIG_FILE = y
+
+2. Розмістити файли:
+   /system/etc/wifi/wifi_efuse.map  — карта eFuse
+   /data/wifimac.txt                — MAC-адреса
+
+3. Прочитати завантажену карту:
+   # rtwpriv wlan0 efuse_get drvmap
+
+
+============================================================
+14. ВЕРИФІКАЦІЯ TX POWER INDEX З EFUSE
+============================================================
+
+Після калібрування і запису power index у eFuse виконайте
+наступну перевірку:
+
+1. Перезавантажити або перезавантажити модуль:
+   # rmmod 8812au
+   # insmod 8812au.ko
+
+2. Підняти інтерфейс:
+   # ifconfig wlan0 up
+
+3. Увійти в режим MP:
+   # rtwpriv wlan0 mp_start
+
+4. Задати параметри:
+   # rtwpriv wlan0 mp_channel 1
+   # rtwpriv wlan0 mp_bandwidth 40M=0,shortGI=0
+   # rtwpriv wlan0 mp_ant_tx a
+
+5. Задати швидкість:
+   # rtwpriv wlan0 mp_rate 108
+
+6. Прочитати TX power index з eFuse:
+   # rtwpriv wlan0 mp_get_txpower 0    (антена A = шлях 0)
+   # rtwpriv wlan0 mp_get_txpower 1    (антена B = шлях 1)
+
+7. Застосувати отримані значення:
+   # rtwpriv wlan0 mp_txpower patha=<значення_з_кроку_6>,pathb=<значення>
+
+8. Запустити і зупинити тест для підтвердження:
+   # rtwpriv wlan0 mp_ctx background,pkt
+   # rtwpriv wlan0 mp_ctx stop
+
+9. Вийти з MP режиму:
+   # rtwpriv wlan0 mp_stop
+   # ifconfig wlan0 down
+
+--- 14.1. Зчитати значення термометра (Thermometer) ---
+
+Зчитати поточне значення:
+  # rtwpriv wlan0 mp_ther
+
+Записати значення термометра у eFuse:
+  # rtwpriv wlan0 mp_ther write
+
+Верифікувати за допомогою читання eFuse за зміщенням:
+  # rtwpriv wlan0 efuse_get rmap,(зміщення_термометра),1
+
+
+============================================================
+15. КЕРУВАННЯ LED-ІНДИКАТОРОМ
+============================================================
+
+--- Статично через Makefile (при збірці) ---
+  CONFIG_LED_ENABLE = y   (увімкнути)
+  CONFIG_LED_ENABLE = n   (вимкнути)
+
+--- Через параметр модуля (постійно) ---
+Додати до /etc/modprobe.d/88XXau.conf:
+  options 88XXau rtw_led_enable=0   (вимкнути LED)
+  options 88XXau rtw_led_enable=1   (увімкнути LED)
+
+--- Динамічно через /proc ---
+Вимкнути LED (замінити ім'я_інтерфейсу):
+  # echo "0" > /proc/net/rtl8812au/wlan0/led_enable
+
+Увімкнути LED:
+  # echo "1" > /proc/net/rtl8812au/wlan0/led_enable
+
+Перевірити поточний стан:
+  # cat /proc/net/rtl8812au/wlan0/led_enable
+
+
+============================================================
+16. НАЛАШТУВАННЯ NETWORKMANAGER
+============================================================
+
+Сучасні версії NetworkManager мають функції, які можуть
+заважати роботі адаптера. Рекомендується їх відключити.
+
+Додати в кінець файлу /etc/NetworkManager/NetworkManager.conf:
+
+  [device]
+  wifi.scan-rand-mac-address=no
+
+  [ifupdown]
+  managed=false
+
+  [connection]
+  wifi.powersave=2
+
+Пояснення:
+  scan-rand-mac-address=no  — вимкнути рандомізацію MAC при скануванні
+  managed=false             — не керувати інтерфейсами через ifupdown
+  wifi.powersave=2          — вимкнути режим збереження Wi-Fi енергії
+
+Перезапустити NetworkManager:
+  # sudo service NetworkManager restart
+
+
+============================================================
+17. УСУНЕННЯ ПОШИРЕНИХ ПРОБЛЕМ
+============================================================
+
+П: Адаптер не виявляється після підключення USB.
+В: Перевірте, чи завантажився модуль: lsmod | grep 88XXau
+   Дивіться журнал ядра: dmesg | tail -40
+
+П: Погане з'єднання або低 швидкість.
+В: Вимкніть управління живленням:
+   options 88XXau rtw_power_mgnt=0 rtw_enusbss=0 rtw_ips_mode=1
+   у /etc/modprobe.d/88XXau.conf
+
+П: Точка доступу не запускається (hostapd).
+В: Переконайтесь, що зупинили NetworkManager та wpa_supplicant.
+   Перевірте конфігурацію: hostapd -dd /path/to/conf
+   Для 802.11ac: insmod 8812au.ko rtw_vht_enable=2
+
+П: 5 ГГц канали позначені як NO-IR (пасивне сканування).
+В: Додати у Makefile:
+   CONFIG_DISABLE_REGD_C = y
+   Перевірте регуляторну конфігурацію вашої країни.
+
+П: wpa_cli відповідає "Failed to connect to wpa_supplicant".
+В: Виконуйте команди wpa_cli із sudo.
+
+П: Не зберігається fake eFuse карта (очищається після restart).
+В: Вийдіть з режиму збереження енергії перед записом:
+   # rtwpriv wlan0 mp_start  або  rtwpriv wlan0 pm_set ips=0
+
+П: Адаптер працює некоректно після запису неправильних даних у eFuse.
+В: eFuse є НЕОБОРОТНИМ носієм. Завжди перевіряйте fake-карту
+   перед командою wlfk2map.
+
+П: Не вдається зібрати драйвер для нового ядра.
+В: DKMS оновлює модуль автоматично. Якщо збираєте вручну —
+   переконайтесь у встановлених linux-headers для поточного ядра:
+   # apt-get install linux-headers-$(uname -r)
+
+============================================================
+                   КІНЕЦЬ ІНСТРУКЦІЇ
+============================================================
